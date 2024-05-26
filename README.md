@@ -1,1 +1,1 @@
-# aws-skills
+# World Skills Korea - Cloud Computing
