@@ -1,0 +1,539 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation Template"
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AmazonLinux2023: ami-0b72821e2f351e396
+    ap-northeast-2:
+      AmazonLinux2023: ami-04ea5b2d3c8ceccf8
+  ResourceMap:
+    Vpc:
+      Name : VPC
+      CidrBlockA: 10.2.0.0/16
+      CidrBlockB: 10.4.0.0/16
+    PublicSubnet:
+      Name: public
+    PrivateSubnet:
+      Name: private
+    BastionEc2:
+      Name: Bastion
+      InstanceType: t3.micro
+    ServiceEc2:
+      Name: Service
+      InstanceType: t3.micro
+
+Resources:
+  KeyPairA:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "key-A"
+  KeyPairB:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "key-B"
+  VpcA:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsHostnames: True
+      CidrBlock: !FindInMap [ResourceMap, Vpc, CidrBlockA]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "A"]]
+  VpcB:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsHostnames: True
+      CidrBlock: !FindInMap [ResourceMap, Vpc, CidrBlockB]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "B"]]
+  VpcPeering:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      PeerVpcId: !Ref VpcB
+      Tags: 
+        - Key: Name
+          Value: VPC_A_VPC_B
+      VpcId: !Ref VpcA
+  VpcAPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [0, !Cidr [ !GetAtt VpcA.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PublicSubnet, Name], "A"]]
+      VpcId: !Ref VpcA
+  VpcBPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [0, !Cidr [ !GetAtt VpcB.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PublicSubnet, Name], "B"]]
+      VpcId: !Ref VpcB
+  VpcAPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [1, !Cidr [ !GetAtt VpcA.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PrivateSubnet, Name], "A"]]
+      VpcId: !Ref VpcA
+  VpcBPrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [1, !Cidr [ !GetAtt VpcB.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PrivateSubnet, Name], "B", "a"]]
+      VpcId: !Ref VpcB
+  VpcBPrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [2, !Cidr [ !GetAtt VpcB.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PrivateSubnet, Name], "B", "b"]]
+      VpcId: !Ref VpcB
+  VpcAInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "A", "igw"]]
+  VpcAInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref VpcAInternetGateway
+      VpcId: !Ref VpcA
+  VpcBInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "B", "igw"]]
+  VpcBInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref VpcBInternetGateway
+      VpcId: !Ref VpcB
+  VpcANatGatewayElasticIp:
+    Type: AWS::EC2::EIP
+  VpcANatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt VpcANatGatewayElasticIp.AllocationId
+      SubnetId: !Ref VpcAPublicSubnet
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "A", "natgw"]]
+  VpcBNatGatewayElasticIp:
+    Type: AWS::EC2::EIP
+  VpcBNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt VpcBNatGatewayElasticIp.AllocationId
+      SubnetId: !Ref VpcBPublicSubnet
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, Vpc, Name], "B", "natgw"]]
+  VpcAPublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PublicSubnet, Name], "A", "rt"]]
+      VpcId: !Ref VpcA
+  VpcAPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcAPublicSubnetRouteTable
+      SubnetId: !Ref VpcAPublicSubnet
+  VpcAPublicSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VpcAInternetGateway
+      RouteTableId: !Ref VpcAPublicSubnetRouteTable 
+  VpcBPublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PublicSubnet, Name], "B", "rt"]]
+      VpcId: !Ref VpcB
+  VpcBPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcBPublicSubnetRouteTable
+      SubnetId: !Ref VpcBPublicSubnet  
+  VpcBPublicSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VpcBInternetGateway
+      RouteTableId: !Ref VpcBPublicSubnetRouteTable
+  VpcAPrivateSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PrivateSubnet, Name], "A", "rt"]]
+      VpcId: !Ref VpcA
+  VpcAPrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcAPrivateSubnetRouteTable
+      SubnetId: !Ref VpcAPrivateSubnet
+  VpcAPrivateSubnetNatGatewayRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref VpcANatGateway
+      RouteTableId: !Ref VpcAPrivateSubnetRouteTable
+  VpcAPrivateSubnetPeeringRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 10.4.0.0/16
+      VpcPeeringConnectionId: !Ref VpcPeering
+      RouteTableId: !Ref VpcAPrivateSubnetRouteTable
+  VpcBPrivateSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["_", [!FindInMap [ResourceMap, PrivateSubnet, Name], "B", "rt"]]
+      VpcId: !Ref VpcB
+  VpcBPrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcBPrivateSubnetRouteTable
+      SubnetId: !Ref VpcBPrivateSubnetA
+  VpcBPrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref VpcBPrivateSubnetRouteTable
+      SubnetId: !Ref VpcBPrivateSubnetB
+  VpcBPrivateSubnetNatGatewayRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref VpcBNatGateway
+      RouteTableId: !Ref VpcBPrivateSubnetRouteTable
+  VpcBPrivateSubnetPeeringRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 10.2.0.0/16
+      VpcPeeringConnectionId: !Ref VpcPeering
+      RouteTableId: !Ref VpcBPrivateSubnetRouteTable
+
+  VpcAInternetAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for VPC_A Internet Access"
+      GroupName: vpc-a-internet-access-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      SecurityGroupEgress: 
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      VpcId: !Ref VpcA
+  VpcBInternetAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for VPC_B Internet Access"
+      GroupName: vpc-b-internet-access-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      SecurityGroupEgress: 
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      VpcId: !Ref VpcB
+  
+  BastionAEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for BastionA EC2 SSH Connection"
+      GroupName: bastion-a-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      SecurityGroupEgress: 
+        - CidrIp: 10.0.0.0/8
+          IpProtocol: -1
+      VpcId: !Ref VpcA
+  BastionBEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for BastionB EC2 SSH Connection"
+      GroupName: bastion-b-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      SecurityGroupEgress: 
+        - CidrIp: 10.0.0.0/8
+          IpProtocol: -1
+      VpcId: !Ref VpcB
+
+  ServiceAEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for ServiceA EC2 SSH Connection"
+      GroupName: service-a-sg
+      SecurityGroupIngress: 
+        - SourceSecurityGroupId: !Ref BastionAEc2SecurityGroup
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      SecurityGroupEgress: 
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 10.0.0.0/8
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      VpcId: !Ref VpcA
+  ServiceBEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for ServiceB EC2 SSH Connection"
+      GroupName: service-b-sg
+      SecurityGroupIngress: 
+        - SourceSecurityGroupId: !Ref BastionBEc2SecurityGroup
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+        - SourceSecurityGroupId: !Ref ApplicationLoadBalancerSecurityGroup
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+      SecurityGroupEgress: 
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 10.0.0.0/8
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      VpcId: !Ref VpcB
+
+  ServiceAEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, ServiceEc2, InstanceType]
+      KeyName: !Ref KeyPairA
+      NetworkInterfaces: 
+        - DeviceIndex: 0
+          SubnetId: !Ref VpcAPrivateSubnet
+          GroupSet: 
+            # - !Ref ServiceAEc2SecurityGroup
+            - !Ref VpcAInternetAccessSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Join ["_", [!FindInMap [ResourceMap, ServiceEc2, Name], "A"]]
+  ServiceBEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, ServiceEc2, InstanceType]
+      KeyName: !Ref KeyPairB
+      NetworkInterfaces: 
+        - DeviceIndex: 0
+          SubnetId: !Ref VpcBPrivateSubnetA
+          GroupSet: 
+            # - !Ref ServiceAEc2SecurityGroup
+            - !Ref VpcBInternetAccessSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Join ["_", [!FindInMap [ResourceMap, ServiceEc2, Name], "B"]]
+      UserData:
+        Fn::Base64:
+            !Sub |
+              #!/bin/bash -xe
+              exec > >(sudo tee /var/log/user-data.log|sudo sh -c "logger -t user-data -s 2>/dev/console") 2>&1
+              dnf update -y
+              dnf install -y httpd
+              systemctl enable httpd
+              systemctl start httpd
+              cp /usr/share/httpd/noindex/index.html /var/www/html/index.html
+  BastionAEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPairA
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref VpcAPublicSubnet
+          GroupSet: 
+            - !Ref BastionAEc2SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Join ["_", [!FindInMap [ResourceMap, BastionEc2, Name], "A"]]
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+  BastionBEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPairB
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref VpcBPublicSubnet
+          GroupSet: 
+            - !Ref BastionBEc2SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !Join ["_", [!FindInMap [ResourceMap, BastionEc2, Name], "B"]]
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+  BastionEc2IamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: Ec2AdminRole
+  BastionEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: Ec2AdminProfile
+      Roles: 
+        - !Ref BastionEc2IamRole
+  
+  ControllerEc2:
+    DependsOn:
+      - BastionAEc2
+      - BastionBEc2
+      - ServiceAEc2
+      - ServiceBEc2
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPairA
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref VpcAPublicSubnet
+          GroupSet: 
+            - !Ref VpcAInternetAccessSecurityGroup
+      Tags: 
+        - Key: Name
+          Value: Controller
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+      UserData:
+        Fn::Base64:
+            !Sub |
+              #!/bin/bash -xe
+              exec > >(sudo tee /var/log/user-data.log|sudo sh -c "logger -t user-data -s 2>/dev/console") 2>&1
+              sleep 300
+              aws ec2 modify-instance-attribute --instance-id ${ServiceBEc2} --groups ${ServiceBEc2SecurityGroup}
+  
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Name: alb
+      Scheme: internal
+      SecurityGroups: 
+        - !Ref ApplicationLoadBalancerSecurityGroup
+      Subnets:
+        - !Ref VpcBPrivateSubnetA
+        - !Ref VpcBPrivateSubnetB
+      Type: application
+  ApplicationLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Application Load Balancer"
+      GroupName: alb-sg
+      SecurityGroupIngress: 
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+      SecurityGroupEgress: 
+        - CidrIp: 10.0.0.0/8
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+      VpcId: !Ref VpcB
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: 
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !GetAtt ApplicationLoadBalancer.LoadBalancerArn
+      Port: 80
+      Protocol: HTTP
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      IpAddressType: ipv4
+      Name: tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      Targets:
+        - Id : !Ref ServiceBEc2
+      UnhealthyThresholdCount: 4
+      VpcId: !Ref VpcB
+
+  Route53HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: internal
+      VPCs: 
+        - VPCId: !Ref VpcA
+          VPCRegion: !Ref AWS::Region
+        # - VPCId: !Ref VpcB
+        #   VPCRegion: !Ref AWS::Region
+  Route53RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref Route53HostedZone
+      Name: service.internal
+      Region: !Ref AWS::Region
+      ResourceRecords: 
+        - !GetAtt ApplicationLoadBalancer.DNSName
+      SetIdentifier: id_001
+      TTL: 300
+      Type: CNAME
+  

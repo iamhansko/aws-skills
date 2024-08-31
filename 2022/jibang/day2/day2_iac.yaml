@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation Template"
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AmazonLinux2023: ami-0b72821e2f351e396
+    ap-northeast-2:
+      AmazonLinux2023: ami-04ea5b2d3c8ceccf8
+  ResourceMap:
+    Vpc:
+      Name : vpc
+      CidrBlock: 10.0.0.0/16
+    PublicSubnet:
+      Name: public
+    InternetGateway:
+      Name: igw
+    BastionEc2:
+      Name: bastion-ec2
+      InstanceType: t3.medium
+
+Resources:
+  S3Bucket:
+    DeletionPolicy: RetainExceptOnCreate
+    Type: AWS::S3::Bucket
+  KinesisDataStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: kda_flink_kinesis_stream
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+  KinesisDataAnalyticsIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - kinesisanalytics.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: KinesisIamPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: !Sub 
+                  - ${BucketArn}/*
+                  - BucketArn : !GetAtt S3Bucket.Arn
+              - Effect: Allow
+                Action:
+                  - kinesisanalytics:*
+                  - firehose:*
+                  - kinesis:*
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - logs:*
+                  - cloudwatch:*
+                  - autoscaling:Describe*
+                  - sns:*
+                  - iam:ListPolicyVersions
+                  - iam:ListRoles
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                  - iam:GetRole
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - iam:PassRole
+                Resource: arn:aws:iam::*:role/service-role/kinesis-analytics*
+              - Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: arn:aws:iam::*:role/aws-service-role/events.amazonaws.com/AWSServiceRoleForCloudWatchEvents*
+                Condition:
+                  StringLike:
+                    "iam:AWSServiceName": "events.amazonaws.com"
+      RoleName: kda_flink_role
+  KinesisDataAnalytics:
+    Type: AWS::KinesisAnalyticsV2::Application
+    Properties:
+      ApplicationName: kda_flink_application
+      RuntimeEnvironment: FLINK-1_13
+      ServiceExecutionRole: !GetAtt KinesisDataAnalyticsIamRole.Arn
+      ApplicationConfiguration:
+        EnvironmentProperties: 
+          PropertyGroups: 
+            - PropertyGroupId: FlinkAppProperties
+              PropertyMap: 
+                s3_output_path: !Sub
+                  - s3a://${BucketName}/kda_flink_starter_kit_output
+                  - BucketName : !Ref S3Bucket
+        FlinkApplicationConfiguration: 
+          MonitoringConfiguration:
+            ConfigurationType: CUSTOM
+            LogLevel: INFO
+            MetricsLevel: TASK
+  KinesisDataAnalyticsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/kinesis-analytics/kda_flink_application
+  KinesisDataAnalyticsLogStream:
+    DependsOn: KinesisDataAnalyticsLogGroup
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: /aws/kinesis-analytics/kda_flink_application
+      LogStreamName: kinesis-analytics-log-stream
+  KinesisDataAnalyticsCloudWatchLoggingOption:
+    Type: AWS::KinesisAnalyticsV2::ApplicationCloudWatchLoggingOption
+    Properties:
+      ApplicationName: kda_flink_application
+      CloudWatchLoggingOption: 
+        LogStreamARN: !Join
+          - ":"
+          - - arn:aws:logs
+            - !Ref AWS::Region
+            - !Ref AWS::AccountId
+            - log-group
+            - !Ref KinesisDataAnalyticsLogGroup
+            - log-stream
+            - !Ref KinesisDataAnalyticsLogStream
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "bastion-ec2-key"
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [ResourceMap, Vpc, CidrBlock]
+      Tags: 
+        - Key : Name
+          Value : !FindInMap [ResourceMap, Vpc, Name]
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [0, !Cidr [ !GetAtt Vpc.CidrBlock, 4, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "a"]]
+      VpcId: !Ref Vpc
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !FindInMap [ResourceMap, InternetGateway, Name]
+  VpcInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+  PublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "rt"]]
+      VpcId: !Ref Vpc
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicSubnetRouteTable
+  BastionEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPair
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnetA
+          GroupSet: 
+            - !Ref BastionEc2SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !FindInMap [ResourceMap, BastionEc2, Name]
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+  BastionEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Bastion EC2 SSH Connection"
+      GroupName: bastion-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      VpcId: !Ref Vpc
+  BastionEc2IamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: Ec2AdminRole
+  BastionEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: Ec2AdminProfile
+      Roles: 
+        - !Ref BastionEc2IamRole
