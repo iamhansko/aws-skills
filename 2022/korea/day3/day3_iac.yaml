@@ -221,21 +221,22 @@ Resources:
               EXPOSE 8080
               CMD [\"python3\", \"./app.py\"]" > /home/ec2-user/Dockerfile
               docker build -t day3 /home/ec2-user
+              docker run -d -p 80:8080 day3
               echo "AWSTemplateFormatVersion: '2010-09-09'
               Description: 'CloudFormation Template'
               Mappings:
                 ResourceMap:
                   Vpc:
-                    Name : cf-vpc
+                    Name : skills-22-q4-vpc
                     CidrBlock: 10.0.0.0/16
                   PublicSubnet:
-                    Name: cf-public
+                    Name: skills-22-q4-pub
                   PrivateSubnet:
-                    Name: cf-private
+                    Name: skills-22-q4-priv
                   InternetGateway:
-                    Name: cf-igw
+                    Name: skills-22-q4-igw
                   NatGateway:
-                    Name: cf-natgw
+                    Name: skills-22-q4-natgw
               Resources:
                 Vpc:
                   Type: AWS::EC2::VPC
@@ -251,7 +252,7 @@ Resources:
                     CidrBlock: !Select [0, !Cidr [ !GetAtt Vpc.CidrBlock, 4, 8 ]]
                     Tags: 
                       - Key : Name
-                        Value : !Join ['-', [!FindInMap [ResourceMap, PublicSubnet, Name], 'a']]
+                        Value : !Join ['-', [!FindInMap [ResourceMap, PublicSubnet, Name], 'A']]
                     VpcId: !Ref Vpc
                 PublicSubnetB:
                   Type: AWS::EC2::Subnet
@@ -260,7 +261,7 @@ Resources:
                     CidrBlock: !Select [1, !Cidr [ !GetAtt Vpc.CidrBlock, 4, 8 ]]
                     Tags: 
                       - Key : Name
-                        Value : !Join ['-', [!FindInMap [ResourceMap, PublicSubnet, Name], 'b']]
+                        Value : !Join ['-', [!FindInMap [ResourceMap, PublicSubnet, Name], 'B']]
                     VpcId: !Ref Vpc
                 PrivateSubnetA:
                   Type: AWS::EC2::Subnet
@@ -269,7 +270,7 @@ Resources:
                     CidrBlock: !Select [2, !Cidr [ !GetAtt Vpc.CidrBlock, 4, 8 ]]
                     Tags: 
                       - Key : Name
-                        Value : !Join ['-', [!FindInMap [ResourceMap, PrivateSubnet, Name], 'a']]
+                        Value : !Join ['-', [!FindInMap [ResourceMap, PrivateSubnet, Name], 'A']]
                     VpcId: !Ref Vpc
                 PrivateSubnetB:
                   Type: AWS::EC2::Subnet
@@ -278,7 +279,7 @@ Resources:
                     CidrBlock: !Select [3, !Cidr [ !GetAtt Vpc.CidrBlock, 4, 8 ]]
                     Tags: 
                       - Key : Name
-                        Value : !Join ['-', [!FindInMap [ResourceMap, PrivateSubnet, Name], 'b']]
+                        Value : !Join ['-', [!FindInMap [ResourceMap, PrivateSubnet, Name], 'B']]
                     VpcId: !Ref Vpc
                 InternetGateway:
                   Type: AWS::EC2::InternetGateway
@@ -374,8 +375,9 @@ Resources:
               echo "This is b." > /opt/b.txt
               echo "This is c." > /opt/c.txt
               echo "#!/bin/bash
-              BUCKET=s3://skills-korea-2022-\$((\$RANDOM%10000))
+              BUCKET=s3://skills-korea-2022-\$(uuidgen -r)
               aws s3 mb \$BUCKET
+              echo \$BUCKET
               aws s3 cp /opt/a.txt \$BUCKET/a.txt
               aws s3 cp /opt/b.txt \$BUCKET/b.txt
               aws s3 cp /opt/c.txt \$BUCKET/c.txt" > /opt/cli.sh
