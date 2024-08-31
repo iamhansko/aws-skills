@@ -1,0 +1,789 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation Template"
+
+# Parameters:
+#   KeyPair: 
+#     Description: EC2 Key Pair
+#     Type: AWS::EC2::KeyPair::KeyName
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AmazonLinux2023: ami-0b72821e2f351e396
+    ap-northeast-2:
+      AmazonLinux2023: ami-04ea5b2d3c8ceccf8
+  ResourceMap:
+    Vpc:
+      Name : skills-vpc
+      CidrBlock: 10.100.0.0/16
+    PublicSubnet:
+      Name: skills-public
+    PrivateSubnet:
+      Name: skills-private
+    ProtectedSubnet:
+      Name: skills-protected
+    InternetGateway:
+      Name: skills-igw
+    NatGateway:
+      Name: skills-nat
+    BastionEc2:
+      Name: skills-bastion2
+      InstanceType: t3.small #t4g.large
+
+Resources:
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub
+        - "key-${Id}"
+        - Id: !Select [3, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
+  
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsHostnames: True
+      CidrBlock: !FindInMap [ResourceMap, Vpc, CidrBlock]
+      Tags: 
+        - Key : Name
+          Value : !FindInMap [ResourceMap, Vpc, Name]
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [1, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key: Name
+          Value: !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "a"]]
+        - Key: kubernetes.io/role/elb
+          Value: 1
+      VpcId: !Ref Vpc
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [2, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key: Name
+          Value: !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "b"]]
+        - Key: kubernetes.io/role/elb
+          Value: 1
+      VpcId: !Ref Vpc
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [11, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "a"]]
+        - Key: kubernetes.io/role/internal-elb
+          Value: 1
+      VpcId: !Ref Vpc
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [12, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "b"]]
+        - Key: kubernetes.io/role/internal-elb
+          Value: 1
+      VpcId: !Ref Vpc
+  ProtectedSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [21, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, ProtectedSubnet, Name], "subnet", "a"]]
+      VpcId: !Ref Vpc
+  ProtectedSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [22, !Cidr [ !GetAtt Vpc.CidrBlock, 24, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, ProtectedSubnet, Name], "subnet", "b"]]
+      VpcId: !Ref Vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !FindInMap [ResourceMap, InternetGateway, Name]
+  VpcInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+  NatGatewayAElasticIp:
+    Type: AWS::EC2::EIP
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, NatGateway, Name], "a"]]
+  NatGatewayBElasticIp:
+    Type: AWS::EC2::EIP
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayBElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, NatGateway, Name], "b"]]
+      
+  PublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "rtb"]]
+      VpcId: !Ref Vpc
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnetB
+  PublicSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicSubnetRouteTable
+  
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "rtb", "a"]]
+      VpcId: !Ref Vpc
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetARouteTable
+      SubnetId: !Ref PrivateSubnetA
+  PrivateSubnetARoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+      RouteTableId: !Ref PrivateSubnetARouteTable
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "rtb", "b"]]
+      VpcId: !Ref Vpc
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetBRouteTable
+      SubnetId: !Ref PrivateSubnetB
+  PrivateSubnetBRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+      RouteTableId: !Ref PrivateSubnetBRouteTable
+  ProtectedSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, ProtectedSubnet, Name], "rtb"]]
+      VpcId: !Ref Vpc
+  ProtectedSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProtectedSubnetRouteTable
+      SubnetId: !Ref ProtectedSubnetA
+  ProtectedSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProtectedSubnetRouteTable
+      SubnetId: !Ref ProtectedSubnetB
+
+  UserEcr:
+    Type: AWS::ECR::Repository
+    Properties:
+      EmptyOnDelete: True
+      RepositoryName: user
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: KMS
+      ImageTagMutability: IMMUTABLE
+  TokenEcr:
+    Type: AWS::ECR::Repository
+    Properties:
+      EmptyOnDelete: True
+      RepositoryName: token
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: KMS
+      ImageTagMutability: IMMUTABLE
+  
+  BastionEc2:
+    Type: AWS::EC2::Instance
+    DependsOn: 
+      - EksCluster
+      - UserEcr
+      - TokenEcr
+    # CreationPolicy:
+      # ResourceSignal:
+      #   Count: '1'                
+      #   Timeout: PT5M
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPair
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnetA
+          GroupSet: 
+            - !Ref BastionEc2SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !FindInMap [ResourceMap, BastionEc2, Name]
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+      UserData: 
+        # sudo tail -f /var/log/cloud-init-output.log
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            dnf update -y
+            dnf install docker -y
+            systemctl start docker
+            systemctl enable docker
+            usermod -aG docker ec2-user
+            newgrp docker
+
+            mkdir -p /home/ec2-user/user
+            mkdir -p /home/ec2-user/token
+
+            echo 'FROM alpine
+            WORKDIR /app
+            RUN apk --no-cache add ca-certificates curl && apk --no-cache upgrade
+            COPY user ./
+            RUN chmod +x ./user
+            RUN adduser -D user
+            RUN chown user:user ./user
+            USER user
+            ENTRYPOINT ["./user"]' > /home/ec2-user/user/Dockerfile
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            USER_IMAGE_TAG=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${UserEcr}:prototype
+            docker build -t $USER_IMAGE_TAG /home/ec2-user/user
+            docker push $USER_IMAGE_TAG
+            echo 'FROM alpine
+            WORKDIR /app
+            RUN apk --no-cache add ca-certificates curl && apk --no-cache upgrade
+            COPY token ./
+            RUN chmod +x ./token
+            RUN adduser -D token
+            RUN chown token:token ./token
+            USER token
+            ENTRYPOINT ["./token"]' > /home/ec2-user/token/Dockerfile
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            TOKEN_IMAGE_TAG=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${TokenEcr}:prototype
+            docker build -t $TOKEN_IMAGE_TAG /home/ec2-user/token
+            docker push $TOKEN_IMAGE_TAG
+            
+            sudo -Eu ec2-user bash << 'EOF'
+            cd /home/ec2-user
+            mkdir -p /home/ec2-user/bin
+            curl -O https://s3.us-west-2.amazonaws.com/amazon-eks/1.30.0/2024-05-12/bin/linux/amd64/kubectl
+            chmod +x kubectl
+            cp kubectl /home/ec2-user/bin/kubectl
+            export PATH=/home/ec2-user/bin:$PATH
+            echo "export PATH=/home/ec2-user/bin:$PATH" >> ~/.bashrc
+            echo "alias k=kubectl" >>~/.bashrc
+            echo "complete -o default -F __start_kubectl k" >>~/.bashrc
+            echo "source <(kubectl completion bash)" >>~/.bashrc
+            exec bash
+            aws eks update-kubeconfig --region ${AWS::Region} --name ${EksCluster}
+
+            curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+            sudo mv /tmp/eksctl /usr/local/bin
+            aws configure set region ${AWS::Region}
+            eksctl utils associate-iam-oidc-provider --cluster ${EksCluster} --approve --region ${AWS::Region}
+
+            sudo dnf install -y git
+            curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 > /home/ec2-user/get_helm.sh
+            chmod 700 /home/ec2-user/get_helm.sh
+            /home/ec2-user/get_helm.sh
+
+            sleep 10
+            eksctl create iamserviceaccount \
+            --cluster=${EksCluster} \
+            --namespace=kube-system \
+            --name=aws-load-balancer-controller \
+            --role-name AmazonEKSLoadBalancerControllerRole \
+            --attach-policy-arn=${AWSLoadBalancerControllerIAMPolicy} \
+            --approve --region ${AWS::Region}
+            helm repo add eks https://aws.github.io/eks-charts
+            helm repo update eks
+            helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system \
+            --set clusterName=${EksCluster} \
+            --set serviceAccount.create=false \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --set region=${AWS::Region} \
+            --set vpcId=${Vpc}
+            kubectl rollout status -n kube-system deploy aws-load-balancer-controller
+            sleep 10
+
+            mkdir -p ~/environment/cluster-autoscaler
+            eksctl create iamserviceaccount \
+                --name cluster-autoscaler \
+                --namespace kube-system \
+                --cluster ${EksCluster} \
+                --attach-policy-arn "${AmazonEKSClusterAutoscalerPolicy}" \
+                --approve \
+                --override-existing-serviceaccounts
+            kubectl -n kube-system describe sa cluster-autoscaler
+            curl -o ~/environment/cluster-autoscaler/cluster-autoscaler-autodiscover.yaml https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
+
+            sed -i "s/<YOUR CLUSTER NAME>/${EksCluster}/g" ~/environment/cluster-autoscaler/cluster-autoscaler-autodiscover.yaml
+            kubectl apply -f ~/environment/cluster-autoscaler/cluster-autoscaler-autodiscover.yaml
+            kubectl -n kube-system annotate deployment.apps/cluster-autoscaler cluster-autoscaler.kubernetes.io/safe-to-evict="false"
+            K8S_VERSION=$(kubectl version | grep "Server Version:" | sed "s/[^0-9.]*\([0-9.]*\).*/\1/" | cut -d. -f1,2)
+            AUTOSCALER_VERSION=$(curl -s "https://api.github.com/repos/kubernetes/autoscaler/releases" | grep "\"tag_name\":" | sed -s "s/.*-\([0-9][0-9\.]*\).*/\1/" | grep -m1 $K8S_VERSION)
+            echo $AUTOSCALER_VERSION
+            kubectl -n kube-system \
+            set image deployment.apps/cluster-autoscaler \
+            cluster-autoscaler="registry.k8s.io/autoscaling/cluster-autoscaler:v$AUTOSCALER_VERSION"
+            kubectl rollout status -n kube-system deploy cluster-autoscaler
+            sleep 10
+
+            kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+            sleep 20
+
+            # AwsLoadbalancerController (kube-system)
+            kubectl patch -n kube-system deployment aws-load-balancer-controller -p '{"spec": {"template": {"spec": {"nodeSelector": {"skills/dedicated": "addon"}}}}}'
+            kubectl scale -n kube-system deployment aws-load-balancer-controller --replicas=0
+            sleep 10
+            kubectl scale -n kube-system deployment aws-load-balancer-controller --replicas=2
+
+            # ClusterAutoscaler (kube-system)
+            kubectl patch -n kube-system deployment cluster-autoscaler -p '{"spec": {"template": {"spec": {"nodeSelector": {"skills/dedicated": "addon"}}}}}'
+            kubectl scale -n kube-system deployment cluster-autoscaler --replicas=0
+            sleep 10
+            kubectl scale -n kube-system deployment cluster-autoscaler --replicas=1
+
+            # CoreDNS (kube-system)
+            kubectl patch -n kube-system deployment coredns -p '{"spec": {"template": {"spec": {"nodeSelector": {"skills/dedicated": "addon"}}}}}'
+            kubectl scale -n kube-system deployment coredns --replicas=0
+            sleep 10
+            kubectl scale -n kube-system deployment coredns --replicas=2
+
+            # MetricsServer (kube-system)
+            kubectl patch -n kube-system deployment metrics-server -p '{"spec": {"template": {"spec": {"nodeSelector": {"skills/dedicated": "addon"}}}}}'
+            kubectl scale -n kube-system deployment metrics-server --replicas=0
+            sleep 10
+            kubectl scale -n kube-system deployment metrics-server --replicas=1
+
+            # /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionEc2 --region ${AWS::Region}
+  BastionEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Bastion EC2 SSH Connection"
+      GroupName: bastion-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22 #22222
+          IpProtocol: tcp
+          ToPort: 22 #22222
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: bastion-sg
+  BastionEc2IamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: Ec2AdminRole
+  BastionEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: Ec2AdminProfile
+      Roles: 
+        - !Ref BastionEc2IamRole
+  BastionEc2ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref BastionEc2
+
+  AWSLoadBalancerControllerIAMPolicy:
+    # https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.4.7/docs/install/iam_policy.json
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "iam:CreateServiceLinkedRole"
+            Resource: "*"
+            Condition:
+              StringEquals: 
+                "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
+          - Effect: "Allow"
+            Action: 
+              - "ec2:*"
+              - "elasticloadbalancing:*"
+            Resource: "*"
+          - Effect: "Allow"
+            Action: 
+              - "cognito-idp:DescribeUserPoolClient"
+              - "acm:ListCertificates"
+              - "acm:DescribeCertificate"
+              - "iam:ListServerCertificates"
+              - "iam:GetServerCertificate"
+              - "waf-regional:GetWebACL"
+              - "waf-regional:GetWebACLForResource"
+              - "waf-regional:AssociateWebACL"
+              - "waf-regional:DisassociateWebACL"
+              - "wafv2:GetWebACL"
+              - "wafv2:GetWebACLForResource"
+              - "wafv2:AssociateWebACL"
+              - "wafv2:DisassociateWebACL"
+              - "shield:GetSubscriptionState"
+              - "shield:DescribeProtection"
+              - "shield:CreateProtection"
+              - "shield:DeleteProtection"
+            Resource: "*"
+      ManagedPolicyName: AWSLoadBalancerControllerIAMPolicy
+  AmazonEKSClusterAutoscalerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "VisualEditor0"
+            Effect: "Allow"
+            Action:
+              - "autoscaling:SetDesiredCapacity"
+              - "autoscaling:TerminateInstanceInAutoScalingGroup"
+            Resource: "*"
+            Condition: 
+              StringEquals:
+                "aws:ResourceTag/k8s.io/cluster-autoscaler/${EksCluster}": "owned"
+          - Sid: "VisualEditor1"
+            Effect: "Allow"
+            Action:
+              - "autoscaling:DescribeAutoScalingInstances"
+              - "autoscaling:DescribeAutoScalingGroups"
+              - "ec2:DescribeLaunchTemplateVersions"
+              - "autoscaling:DescribeTags"
+              - "autoscaling:DescribeLaunchConfigurations"
+              - "ec2:DescribeInstanceTypes"
+            Resource: "*"
+      ManagedPolicyName: AmazonEKSClusterAutoscalerPolicy
+
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: skills-eks-cluster
+      AccessConfig: 
+        AuthenticationMode: API_AND_CONFIG_MAP
+        BootstrapClusterCreatorAdminPermissions: true
+      BootstrapSelfManagedAddons: true
+      Logging: 
+        ClusterLogging: 
+          EnabledTypes: 
+            - Type: api
+            - Type: audit
+            - Type: authenticator
+            - Type: controllerManager
+            - Type: scheduler
+      ResourcesVpcConfig: 
+        EndpointPrivateAccess: true
+        EndpointPublicAccess: false
+        SecurityGroupIds: 
+          - !Ref EksClusterSecurityGroup
+        SubnetIds: 
+          # - !Ref PublicSubnetA
+          # - !Ref PublicSubnetB
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      RoleArn: !GetAtt EksClusterIamRole.Arn
+      EncryptionConfig: 
+        - Provider: 
+            KeyArn: !GetAtt EksSecretsKmsKey.Arn
+          Resources: 
+            - secrets
+  EksSecretsKmsKey:
+    Type: AWS::KMS::Key
+  AddonNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      NodegroupName: skills-eks-addon-nodegroup
+      AmiType: AL2023_x86_64_STANDARD
+      InstanceTypes: 
+        - t3.medium #t4g.large
+      CapacityType: ON_DEMAND
+      ClusterName: !Ref EksCluster
+      ForceUpdateEnabled: true
+      Labels: 
+        skills/dedicated: addon
+      NodeRole: !GetAtt EksNodeIamRole.Arn
+      ScalingConfig: 
+        DesiredSize: 2
+        MaxSize: 4
+        MinSize: 2
+      Subnets: 
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      LaunchTemplate:
+        Id: !Ref AddonLaunchTemplate
+  AddonLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: skills-eks-addon-launchtemplate
+      LaunchTemplateData: 
+        KeyName: !Ref KeyPair
+        SecurityGroupIds: 
+          - !Ref EksNodeSecurityGroup
+        TagSpecifications: 
+          - ResourceType: instance
+            Tags: 
+              - Key: Name
+                Value: skills-eks-addon-node
+  AppNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      NodegroupName: skills-eks-app-nodegroup
+      AmiType: AL2023_x86_64_STANDARD
+      InstanceTypes: 
+        - t3.medium #m6g.large
+      CapacityType: ON_DEMAND
+      ClusterName: !Ref EksCluster
+      ForceUpdateEnabled: true
+      Labels: 
+        skills/dedicated: app
+      NodeRole: !GetAtt EksNodeIamRole.Arn
+      ScalingConfig: 
+        DesiredSize: 2
+        MaxSize: 4
+        MinSize: 2
+      Subnets: 
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      LaunchTemplate:
+        Id: !Ref AppLaunchTemplate
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: skills-eks-app-launchtemplate
+      LaunchTemplateData: 
+        KeyName: !Ref KeyPair
+        SecurityGroupIds: 
+          - !Ref EksNodeSecurityGroup
+        TagSpecifications: 
+          - ResourceType: instance
+            Tags: 
+              - Key: Name
+                Value: skills-eks-app-node
+  EksFargateProfile:
+    Type: AWS::EKS::FargateProfile
+    Properties:
+      ClusterName: !Ref EksCluster
+      FargateProfileName: skills-eks-app-profile
+      PodExecutionRoleArn: !GetAtt EksFargatePodExecutionIamRole.Arn
+      Selectors: 
+        - Namespace: skills
+      Subnets: 
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+  EksClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for EKS Cluster SSH Connection"
+      GroupName: eks-cluster-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: eks-cluster-sg
+  EksNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for EKS Cluster Node SSH Connection"
+      GroupName: eks-node-sg
+      SecurityGroupIngress: 
+        # - SourceSecurityGroupId: !Ref BastionEc2SecurityGroup
+        #   FromPort: 22222
+        #   IpProtocol: tcp
+        #   ToPort: 22222
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: eks-node-sg
+  EksClusterIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSForFargateServiceRolePolicy 
+      RoleName: EksClusterIamRole
+  EksNodeIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+      RoleName: EksNodeIamRole
+  EksFargatePodExecutionIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - eks-fargate-pods.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+      Condition:
+        ArnLike:
+          "aws:SourceArn": "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:fargateprofile/${EksCluster}/*"
+      RoleName: EksFargatePodExecutionIamRole
+  EksClusterAccessEntry:
+    # To manage your EKS Cluster using 'kubectl' commands inside a Bastion EC2 
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      AccessPolicies: 
+        - AccessScope: 
+            Type: cluster
+          PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+      ClusterName: !Ref EksCluster
+      PrincipalArn: !GetAtt BastionEc2IamRole.Arn
+      Type: STANDARD
+
+  UserCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/app/user
+  TokenCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/app/token
+  DocumentDBCluster:
+    Type: AWS::DocDB::DBCluster
+    Properties:
+      AvailabilityZones: 
+        - ${AWS::Region}a
+        - ${AWS::Region}b
+      DBClusterIdentifier: skills-mongodb-cluster
+      DBSubnetGroupName: !Ref DocumentDBSubnetGroup
+      EnableCloudwatchLogsExports: 
+        - audit
+        - profiler
+      MasterUsername: admin
+      MasterUserPassword: adminpassword1234!
+      Port: 27000 #27017
+      StorageEncrypted: true
+  DocumentDBSubnetGroup:
+    Type: AWS::DocDB::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DocumentDB SubnetGroup
+      DBSubnetGroupName: DocumentDBSubnetGroup
+      SubnetIds: 
+        - !Ref ProtectedSubnetA
+        - !Ref ProtectedSubnetB
+  ElastiCache:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      CacheNodeType: cache.t4g.small
+      ClusterName: skills-redis-cluster
+      Engine: redis
+      IpDiscovery: ipv4
+      LogDeliveryConfigurations: 
+        - DestinationDetails: 
+            CloudWatchLogsDetails:
+              LogGroup: !Ref ElastiCacheCloudWatchLogGroup
+          DestinationType: cloudwatch-logs
+          LogFormat: json
+          LogType: engine-log
+      NetworkType: ipv4
+      NumCacheNodes: 2
+      Port: 6300 #6379
+      SnapshotArns: 
+        - arn:aws:s3:::my_bucket/snapshot1.rdb
+      SnapshotName: snapshot
+      SnapshotRetentionLimit: 2
+      TransitEncryptionEnabled: true
+  ElastiCacheCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /redis
+  SecretsManager:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: usersecret
+      SecretString: 
+        '{"secretValue":"secret1234567890"}'
+
+
+
+
+
+
+
+

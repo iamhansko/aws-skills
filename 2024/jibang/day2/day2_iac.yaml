@@ -1,0 +1,1223 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation Template"
+
+# Parameters:
+#   KeyPair: 
+#     Description: EC2 Key Pair
+#     Type: AWS::EC2::KeyPair::KeyName
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AmazonLinux2023: ami-0b72821e2f351e396
+    ap-northeast-2:
+      AmazonLinux2023: ami-04ea5b2d3c8ceccf8
+  ResourceMap:
+    Vpc:
+      Name : skills-vpc
+      CidrBlock: 172.16.0.0/16
+    PublicSubnet:
+      Name: skills-public
+    PrivateSubnet:
+      Name: skills-private
+    InternetGateway:
+      Name: skills-igw
+    NatGateway:
+      Name: skills-nat
+    BastionEc2:
+      Name: skills-bastion-ec2
+      InstanceType: t3a.small
+    FrontendCodePipeline:
+      Name: skills-frontend-pipeline
+      Source: skills-frontend-code
+    BackendCodePipeline:
+      Name: skills-backend-pipeline
+      Source: skills-backend-code
+      Build: skills-backend-build
+      DeployApplication: skills-backend-app
+      DeploymentGroup: skills-backend-dg
+
+Resources:
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub 
+        - "key-${Id}"
+        - Id: !Select [3, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
+  
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsHostnames: True
+      CidrBlock: !FindInMap [ResourceMap, Vpc, CidrBlock]
+      Tags: 
+        - Key : Name
+          Value : !FindInMap [ResourceMap, Vpc, Name]
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [11, !Cidr [ !GetAtt Vpc.CidrBlock, 16, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "a"]]
+      VpcId: !Ref Vpc
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [12, !Cidr [ !GetAtt Vpc.CidrBlock, 16, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "subnet", "b"]]
+      VpcId: !Ref Vpc
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}a"
+      CidrBlock: !Select [1, !Cidr [ !GetAtt Vpc.CidrBlock, 16, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "subnet", "a"]]
+      VpcId: !Ref Vpc
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Sub "${AWS::Region}b"
+      CidrBlock: !Select [2, !Cidr [ !GetAtt Vpc.CidrBlock, 16, 8 ]]
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "subnet", "b"]]
+      VpcId: !Ref Vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !FindInMap [ResourceMap, InternetGateway, Name]
+  VpcInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+  NatGatewayAElasticIp:
+    Type: AWS::EC2::EIP
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, NatGateway, Name], "a"]]
+  NatGatewayBElasticIp:
+    Type: AWS::EC2::EIP
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayBElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, NatGateway, Name], "b"]]
+
+  PublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PublicSubnet, Name], "rtb"]]
+      VpcId: !Ref Vpc
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref PublicSubnetB
+  PublicSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicSubnetRouteTable
+  
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "rtb", "a"]]
+      VpcId: !Ref Vpc
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetARouteTable
+      SubnetId: !Ref PrivateSubnetA
+  PrivateSubnetARoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+      RouteTableId: !Ref PrivateSubnetARouteTable
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags: 
+        - Key : Name
+          Value : !Join ["-", [!FindInMap [ResourceMap, PrivateSubnet, Name], "rtb", "b"]]
+      VpcId: !Ref Vpc
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetBRouteTable
+      SubnetId: !Ref PrivateSubnetB
+  PrivateSubnetBRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+      RouteTableId: !Ref PrivateSubnetBRouteTable
+  
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      Name: skills-backend-alb
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref ApplicationLoadBalancerSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      Type: application
+  ApplicationLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Application Load Balancer"
+      GroupName: alb-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+      VpcId: !Ref Vpc
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: 
+        - TargetGroupArn: !Ref TargetGroup1
+          Type: forward
+      LoadBalancerArn: !GetAtt ApplicationLoadBalancer.LoadBalancerArn
+      Port: 80
+      Protocol: HTTP
+  TargetGroup1:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /api/health
+      HealthCheckPort: 8080
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      IpAddressType: ipv4
+      Name: skills-tg1
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      UnhealthyThresholdCount: 4
+      VpcId: !Ref Vpc
+  TargetGroup2:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /api/health
+      HealthCheckPort: 8080
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      IpAddressType: ipv4
+      Name: skills-tg2
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      UnhealthyThresholdCount: 4
+      VpcId: !Ref Vpc
+
+  Ecr:
+    Type: AWS::ECR::Repository
+    Properties:
+      EmptyOnDelete: True
+      RepositoryName: skills-ecr
+
+  BastionEc2:
+    Type: AWS::EC2::Instance
+    DependsOn: 
+      - CodeCommitSourceS3Bucket
+      - Ecr
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'                
+        Timeout: PT10M
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref AWS::Region, AmazonLinux2023]
+      InstanceType: !FindInMap [ResourceMap, BastionEc2, InstanceType]
+      KeyName: !Ref KeyPair
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: True
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnetA
+          GroupSet: 
+            - !Ref BastionEc2SecurityGroup
+      Tags: 
+        - Key: Name
+          Value: !FindInMap [ResourceMap, BastionEc2, Name]
+      IamInstanceProfile: !Ref BastionEc2InstanceProfile
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+            exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            dnf update -y
+            dnf install docker -y
+            systemctl start docker
+            systemctl enable docker
+            usermod -aG docker ec2-user
+            newgrp docker
+            sudo dnf install git -y
+            echo '<!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Skills Frontend</title>
+            </head>
+            <body>
+                <h1>Skills Frontend</h1>
+                <p>This is Single Page Application v1.</p>
+                <button onclick="getTime();">현재 시각 가져오기</button>
+                <p id="now"></p>
+                <script>
+                    const getTime = () => {
+                        fetch("/api/time", {method: "get"})
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById("now").innerHTML = data["time"];
+                        })
+                        .catch(error => {
+                            alert("오류가 발생했습니다.");
+                            console.error(error);
+                        })
+                    }
+                </script>
+            </body>
+            </html>' > index.html
+            zip frontend.zip index.html
+            aws s3 cp frontend.zip s3://${CodeCommitSourceS3Bucket}
+            curl -s "https://get.sdkman.io" | bash && source "/.sdkman/bin/sdkman-init.sh"
+            sdk install java 17.0.12-amzn
+            sdk install springboot
+            sdk install gradle 8.6
+            spring init -a=skills-backend -g=org.worldskills.cloud --build=gradle --type=gradle-project -d=web -n=skills-backend -p=jar --package-name=org.worldskills.cloud.skillsbackend -x skills-backend
+            echo 'package org.worldskills.cloud.skillsbackend;
+
+            import org.slf4j.Logger;
+            import org.slf4j.LoggerFactory;
+            import org.springframework.boot.SpringApplication;
+            import org.springframework.boot.autoconfigure.SpringBootApplication;
+            import org.springframework.http.HttpStatus;
+            import org.springframework.http.ResponseEntity;
+            import org.springframework.web.bind.annotation.GetMapping;
+            import org.springframework.web.bind.annotation.RestController;
+
+            import java.time.LocalDateTime;
+            import java.util.HashMap;
+            import java.util.Map;
+
+            @SpringBootApplication
+            @RestController
+            public class SkillsBackendApplication {
+                private final Logger log = LoggerFactory.getLogger(this.getClass().getSimpleName());
+
+                public static void main(String[] args) {
+                    SpringApplication.run(SkillsBackendApplication.class, args);
+                }
+
+                @GetMapping("/api/")
+                public ResponseEntity<String> index() {
+                    String text = "Hello, World!";
+
+                    log.info("GET | /api/ |200");
+
+                    return new ResponseEntity<>(text, HttpStatus.OK);
+                }
+
+                @GetMapping("/api/time")
+                public ResponseEntity<Map<String, Object>> time() {
+                    Map<String, Object> data = new HashMap<>();
+
+                    LocalDateTime currentDateTime = LocalDateTime.now();
+
+                    data.put("time", currentDateTime);
+
+                    log.info("GET | /api/time | 200");
+
+                    return new ResponseEntity<>(data, HttpStatus.OK);
+                }
+
+                @GetMapping("/api/health")
+                public ResponseEntity<Map<String, Object>> health() {
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("status", "OK");
+
+                    log.info("GET | /api/health | 200");
+
+                    return new ResponseEntity<>(data, HttpStatus.OK);
+                }
+            }' > /skills-backend/src/main/java/org/worldskills/cloud/skillsbackend/SkillsBackendApplication.java
+            cd /skills-backend && zip -r /backend.zip . && cd /
+            aws s3 cp backend.zip s3://${CodeCommitSourceS3Bucket}
+            git config --system credential.helper '!aws codecommit credential-helper $@'
+            git config --system credential.UseHttpPath true
+            echo 'FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+            WORKDIR /app
+            RUN yum update -y && yum install -y java-17-amazon-corretto-headless
+            COPY . .
+            EXPOSE 8080
+            CMD ["java", "-jar", "./build/libs/skills-backend-0.0.1-SNAPSHOT.jar"]' > /skills-backend/Dockerfile
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            IMAGE_TAG=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Ecr}:prototype
+            gradle clean build -p /skills-backend
+            docker build -t $IMAGE_TAG /skills-backend
+            docker push $IMAGE_TAG
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionEc2 --region ${AWS::Region}
+  BastionEc2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security Group for Bastion EC2 SSH Connection"
+      GroupName: bastion-sg
+      SecurityGroupIngress: 
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      VpcId: !Ref Vpc
+  BastionEc2IamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: Ec2AdminRole
+  BastionEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: Ec2AdminProfile
+      Roles: 
+        - !Ref BastionEc2IamRole
+  BastionEc2ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref BastionEc2
+
+  CodeCommitSourceS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
+  
+  CloudFront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior: 
+          AllowedMethods: 
+            - GET
+            - HEAD
+          CachedMethods: 
+            - GET
+            - HEAD
+          CachePolicyId: !Ref CloudFrontCachingOptimizedPolicy
+          TargetOriginId: S3Static
+          ViewerProtocolPolicy: redirect-to-https
+        CacheBehaviors:
+          - AllowedMethods: 
+              - GET
+              - HEAD
+            CachedMethods: 
+              - GET
+              - HEAD
+            CachePolicyId: !Ref CloudFrontCachingDisabledPolicy
+            PathPattern: api/*
+            TargetOriginId: AlbApi
+            ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: True
+        HttpVersion: http1.1
+        IPV6Enabled: False
+        Origins: 
+          - DomainName: 
+              !Sub '${FrontendS3Bucket}.s3.${AWS::Region}.amazonaws.com'
+            Id: S3Static
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          - DomainName: !GetAtt ApplicationLoadBalancer.DNSName
+            Id: AlbApi
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+        PriceClass: PriceClass_All
+        Staging: False
+      Tags:
+        - Key: Name
+          Value: skills-frontend-cdn
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig: 
+        Name: CloudFrontOriginAccessControl
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+  CloudFrontCachingOptimizedPolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig: 
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 1
+        Name: CloudFrontCachingOptimizedPolicy
+        ParametersInCacheKeyAndForwardedToOrigin: 
+          CookiesConfig: 
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: True
+          EnableAcceptEncodingGzip: True
+          HeadersConfig: 
+            HeaderBehavior: none
+          QueryStringsConfig: 
+            QueryStringBehavior: none
+  CloudFrontCachingDisabledPolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig: 
+        DefaultTTL: 0
+        MaxTTL: 0
+        MinTTL: 0
+        Name: CloudFrontCachingDisabledPolicy
+        ParametersInCacheKeyAndForwardedToOrigin: 
+          CookiesConfig: 
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: False
+          EnableAcceptEncodingGzip: False
+          HeadersConfig: 
+            HeaderBehavior: none
+          QueryStringsConfig: 
+            QueryStringBehavior: none
+
+  FrontendCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    DependsOn: BastionEc2
+    Properties:
+      Code: 
+        BranchName: main
+        S3: 
+          Bucket: !Ref CodeCommitSourceS3Bucket
+          Key: frontend.zip
+      RepositoryName: !FindInMap [ResourceMap, FrontendCodePipeline, Source]
+  FrontendS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - "skills-frontend-${Id}"
+        - Id: !Select [3, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]
+    DeletionPolicy: RetainExceptOnCreate
+  FrontendS3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendS3Bucket
+      PolicyDocument:
+        Version: 2008-10-17
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource: !Sub 'arn:aws:s3:::${FrontendS3Bucket}/*'
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFront}"
+  FrontendCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !FindInMap [ResourceMap, FrontendCodePipeline, Name]
+      PipelineType: V2
+      ArtifactStore:
+        Location: !Ref FrontendCodePipelineArtifactStoreS3Bucket
+        Type: S3
+      RoleArn: !GetAtt FrontendCodePipelineIamRole.Arn
+      Stages: 
+        - Name: SourceStage
+          Actions: 
+            - Name: SourceAction
+              ActionTypeId: 
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                RepositoryName: !GetAtt FrontendCodeCommit.Name
+                BranchName: main
+                PollForSourceChanges: False
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: DeployStage
+          Actions: 
+            - Name: DeployAction
+              ActionTypeId: 
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: 1
+              Configuration:
+                BucketName: !Ref FrontendS3Bucket
+                Extract: true
+              InputArtifacts:
+                - Name: SourceOutput
+  FrontendCodePipelineArtifactStoreS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
+  FrontendCodePipelineIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: FrontendCodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub 
+                      - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+                      - CodePipeline: !FindInMap [ResourceMap, FrontendCodePipeline, Name]
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                Resource:
+                  - !GetAtt FrontendCodeCommit.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: "*"
+      RoleName: FrontendCodePipelineRole
+  FrontendCloudWatchEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        AWS CodeCommit 소스 리포지토리와 브랜치에서 변경이 발생하면 파이프라인을 자동으로 시작하는 Amazon
+        CloudWatch Events 규칙입니다. 이 규칙을 삭제하면 해당 파이프라인에서 변경 사항이 감지되지 않습니다. 자세한 정보:
+        http://docs.aws.amazon.com/codepipeline/latest/userguide/pipelines-about-starting.html
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub 
+              - "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${CodeCommit}"
+              - CodeCommit: !FindInMap [ResourceMap, FrontendCodePipeline, Source]
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Name: frontend-codepipeline-event-rule
+      State: ENABLED
+      Targets:
+        - Id: frontend-codepipeline
+          Arn: !Sub 
+            - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+            - CodePipeline: !FindInMap [ResourceMap, FrontendCodePipeline, Name]
+          RoleArn: !GetAtt CloudWatchEventRuleIamRole.Arn
+
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: skills-ecs-cluster
+      CapacityProviders:
+        - FARGATE_SPOT
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+  EcsTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+  EcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ExecutionRoleArn: !GetAtt EcsTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: skills-container
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Ecr}:prototype
+          Essential: true
+          PortMappings:
+            - HostPort: 8080
+              Protocol: tcp
+              ContainerPort: 8080
+          HealthCheck:
+            Command: 
+              - "CMD-SHELL"
+              - "curl -f http://localhost:8080/api/health || exit 1"
+      NetworkMode: awsvpc
+      Cpu: 256
+      Memory: 512
+      Family: skills-td
+      RequiresCompatibilities:
+        - FARGATE
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for ECS
+      GroupName: skills-ecs-sg
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - FromPort: 8080
+          ToPort: 8080
+          IpProtocol: tcp
+          SourceSecurityGroupId: !Ref ApplicationLoadBalancerSecurityGroup
+  EcsTaskCloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/skills-td
+  EcsService:
+    Type: AWS::ECS::Service
+    DependsOn: 
+      - Listener
+      - EcsTaskCloudWatchLogGroup
+    Properties:
+      ServiceName: backend
+      Cluster: !Ref EcsCluster
+      CapacityProviderStrategy:
+        - Base: 0
+          CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      TaskDefinition: !Ref EcsTaskDefinition
+      DesiredCount: 2
+      LoadBalancers:
+        - ContainerName: skills-container
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+          Subnets:
+            - !Ref PrivateSubnetA
+            - !Ref PrivateSubnetB
+      DeploymentController:
+        Type: CODE_DEPLOY
+
+  BackendCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    DependsOn: BastionEc2
+    Properties:
+      Code: 
+        BranchName: main
+        S3: 
+          Bucket: !Ref CodeCommitSourceS3Bucket
+          Key: backend.zip
+      RepositoryName: !FindInMap [ResourceMap, BackendCodePipeline, Source]
+  BackendCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts: 
+        Type: CODEPIPELINE
+      Environment: 
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+      Name: !FindInMap [ResourceMap, BackendCodePipeline, Build]
+      ServiceRole: !Ref BackendCodeBuildIamRole
+      Source: 
+        BuildSpec: !Sub |
+          version: 0.2
+          env:
+            variables:
+              AWS_DEFAULT_REGION: ${AWS::Region}
+              AWS_ACCOUNT_ID: ${AWS::AccountId}
+              IMAGE_REPO_NAME: ${Ecr}
+          phases:
+            pre_build:
+              commands:
+                - ln -sf /usr/share/zoneinfo/Asia/Seoul /etc/localtime
+                - | 
+                  echo 'FROM public.ecr.aws/amazonlinux/amazonlinux:2023
+                  WORKDIR /app
+                  RUN yum update -y && yum install -y java-17-amazon-corretto-headless
+                  COPY . .
+                  EXPOSE 8080
+                  CMD ["java", "-jar", "./build/libs/skills-backend-0.0.1-SNAPSHOT.jar"]' > Dockerfile
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+                - yum install -y wget unzip java-17-amazon-corretto-headless findutils
+                - wget http://services.gradle.org/distributions/gradle-8.6-bin.zip
+                - mkdir /usr/local/gradle
+                - unzip gradle-8.6-bin.zip -d /usr/local/gradle
+            build:
+              commands:
+                # gradle
+                - GRADLE_HOME=/usr/local/gradle/gradle-8.6
+                - PATH=$GRADLE_HOME/bin:$PATH
+                - gradle clean build
+                # docker
+                # - IMAGE_VERSION=$(LC_TIME=ko_KR.UTF-8 date +'%Y-%m-%d.%H.%M.%S')
+                - IMAGE_VERSION="latest"
+                - IMAGE_TAG=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_VERSION
+                - docker build -t $IMAGE_TAG .
+                - docker push $IMAGE_TAG
+            post_build:
+              commands:
+                - IMAGE_VERSION=$(echo $(aws ecr describe-images --repository-name $IMAGE_REPO_NAME --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]') | tr -d '"')
+                - FAMILY="skills-td"
+                - EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/${EcsTaskExecutionRole}"
+                - CONTAINER_NAME="skills-container"
+                - CONTAINER_PORT="8080"
+                - CONTAINER_IMAGE="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_VERSION"
+                - |
+                  echo "{
+                    'family':'$FAMILY',
+                    'executionRoleArn':'$EXECUTION_ROLE_ARN',
+                    'networkMode':'awsvpc',
+                    'cpu':'256',
+                    'memory':'512',
+                    'containerDefinitions':[
+                      {
+                        'healthCheck':{
+                          'command':[
+                            'CMD-SHELL',
+                            'curl -f http://localhost:8080/api/health || exit 1'
+                          ],
+                          'interval':10,
+                          'timeout':5,
+                          'retries':3,
+                          'startPeriod':0
+                        },
+                        'logConfiguration':{
+                          'logDriver':'awslogs',
+                          'options':{
+                            'awslogs-group':'/ecs/skills-td',
+                            'awslogs-region':'$AWS_DEFAULT_REGION',
+                            'awslogs-stream-prefix':'ecs'
+                          }
+                        },
+                        'name':'$CONTAINER_NAME',
+                        'image':'$CONTAINER_IMAGE',
+                        'portMappings':[
+                          {
+                            'containerPort':$CONTAINER_PORT,
+                            'hostPort':$CONTAINER_PORT,
+                            'protocol':'tcp'
+                          }
+                        ]
+                      }
+                    ]
+                  }" > taskdef.json
+                - |
+                  echo "version: 0.0
+                  Resources:
+                    - TargetService:
+                        Type: AWS::ECS::Service
+                        Properties:
+                          TaskDefinition: <TASK_DEFINITION>
+                          LoadBalancerInfo:
+                            ContainerName: '$CONTAINER_NAME'
+                            ContainerPort: $CONTAINER_PORT" > appspec.yaml
+          artifacts:
+            files:
+              - taskdef.json
+              - appspec.yaml
+            discard-paths: yes
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 15
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+  BackendCodeBuildIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BackendCodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchGetImage
+                  - ecr:GetLifecyclePolicy
+                  - ecr:GetLifecyclePolicyPreview
+                  - ecr:ListTagsForResource
+                  - ecr:DescribeImageScanFindings
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecs:*
+                  - iam:PassRole
+                Resource: '*'
+      RoleName: BackendCodeBuildRole
+  BackendCodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !FindInMap [ResourceMap, BackendCodePipeline, DeployApplication]
+      ComputePlatform: ECS
+  BackendCodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn:
+      - EcsService
+    Properties:
+      ApplicationName: !Ref BackendCodeDeployApplication
+      AutoRollbackConfiguration: 
+        Enabled: True
+        Events: 
+          - DEPLOYMENT_FAILURE
+          - DEPLOYMENT_STOP_ON_ALARM
+      DeploymentGroupName: !FindInMap [ResourceMap, BackendCodePipeline, DeploymentGroup]
+      ServiceRoleArn: !GetAtt BackendCodeDeployIamRole.Arn
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      DeploymentStyle:
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+        DeploymentType: BLUE_GREEN
+      ECSServices:
+        - ClusterName: !Ref EcsCluster
+          ServiceName: !GetAtt EcsService.Name
+      LoadBalancerInfo: 
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !GetAtt Listener.ListenerArn
+            TargetGroups:
+              - Name: !GetAtt TargetGroup1.TargetGroupName
+              - Name: !GetAtt TargetGroup2.TargetGroupName
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption: 
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+        TerminateBlueInstancesOnDeploymentSuccess: 
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 0
+  BackendCodeDeployIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codedeploy.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BackendCodeDeployPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:CreateTaskSet
+                  - ecs:UpdateServicePrimaryTaskSet
+                  - ecs:DeleteTaskSet
+                  - elasticloadbalancing:DescribeTargetGroups
+                  - elasticloadbalancing:DescribeListeners
+                  - elasticloadbalancing:ModifyListener
+                  - elasticloadbalancing:DescribeRules
+                  - elasticloadbalancing:ModifyRule
+                  - lambda:InvokeFunction
+                  - cloudwatch:DescribeAlarms
+                  - sns:Publish
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringLike:
+                    "iam:PassedToService" : "ecs-tasks.amazonaws.com"
+      RoleName: BackendCodeDeployRole
+  BackendCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - Ecr 
+      - BackendCodeDeployDeploymentGroup
+    Properties:
+      Name: !FindInMap [ResourceMap, BackendCodePipeline, Name]
+      PipelineType: V2
+      ArtifactStore:
+        Location: !Ref BackendCodePipelineArtifactStoreS3Bucket
+        Type: S3
+      RoleArn: !GetAtt BackendCodePipelineIamRole.Arn
+      Stages: 
+        - Name: SourceStage
+          Actions: 
+            - Name: SourceAction
+              ActionTypeId: 
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                RepositoryName: !GetAtt BackendCodeCommit.Name
+                BranchName: main
+                PollForSourceChanges: False
+              OutputArtifacts:
+                - Name: SourceOutput
+        - Name: BuildStage
+          Actions: 
+            - Name: BuildAction
+              ActionTypeId: 
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref BackendCodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+        - Name: DeployStage
+          Actions: 
+            - Name: DeployAction
+              ActionTypeId: 
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeployToECS
+                Version: 1
+              Configuration:
+                ApplicationName: !FindInMap [ResourceMap, BackendCodePipeline, DeployApplication]
+                DeploymentGroupName: !FindInMap [ResourceMap, BackendCodePipeline, DeploymentGroup]
+                TaskDefinitionTemplateArtifact: BuildOutput
+                TaskDefinitionTemplatePath: taskdef.json
+                AppSpecTemplateArtifact: BuildOutput
+                AppSpecTemplatePath: appspec.yaml
+              InputArtifacts:
+                - Name: BuildOutput
+  BackendCodePipelineArtifactStoreS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: RetainExceptOnCreate
+  BackendCodePipelineIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: BackendCodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub 
+                      - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+                      - CodePipeline: !FindInMap [ResourceMap, BackendCodePipeline, Name]
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                Resource:
+                  - !GetAtt BackendCodeCommit.Arn
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource:
+                  - !GetAtt BackendCodeBuild.Arn
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetDeployment
+                Resource:
+                  - !Sub 
+                      - "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${CodeDeployApplication}/${CodeDeployDeploymentGroup}"
+                      - CodeDeployApplication: !FindInMap [ResourceMap, BackendCodePipeline, DeployApplication]
+                        CodeDeployDeploymentGroup: !FindInMap [ResourceMap, BackendCodePipeline, DeploymentGroup]
+              - Effect: Allow
+                Action:
+                  - codedeploy:GetDeploymentConfig
+                Resource:
+                  - !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentconfig:CodeDeployDefault.ECSAllAtOnce"
+              - Effect: Allow
+                Action:
+                  - codedeploy:RegisterApplicationRevision
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                Resource:
+                  - !Sub 
+                      - "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:application:${CodeDeployApplication}"
+                      - CodeDeployApplication: !FindInMap [ResourceMap, BackendCodePipeline, DeployApplication]
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecs:RegisterTaskDefinition
+                Resource:
+                  - !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/skills-td:*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+              - Effect: Allow
+                Action:
+                  - ecr:*
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Ecr}"
+      RoleName: BackendCodePipelineRole
+  BackendCloudWatchEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: >-
+        AWS CodeCommit 소스 리포지토리와 브랜치에서 변경이 발생하면 파이프라인을 자동으로 시작하는 Amazon
+        CloudWatch Events 규칙입니다. 이 규칙을 삭제하면 해당 파이프라인에서 변경 사항이 감지되지 않습니다. 자세한 정보:
+        http://docs.aws.amazon.com/codepipeline/latest/userguide/pipelines-about-starting.html
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub 
+              - "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${CodeCommit}"
+              - CodeCommit: !FindInMap [ResourceMap, BackendCodePipeline, Source]
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - main
+      Name: backend-codepipeline-event-rule
+      State: ENABLED
+      Targets:
+        - Id: backend-codepipeline
+          Arn: !Sub 
+            - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+            - CodePipeline: !FindInMap [ResourceMap, BackendCodePipeline, Name]
+          RoleArn: !GetAtt CloudWatchEventRuleIamRole.Arn
+
+  CloudWatchEventRuleIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: CloudWatchEventRulePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub 
+                      - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+                      - CodePipeline: !FindInMap [ResourceMap, FrontendCodePipeline, Name]
+                  - !Sub 
+                      - "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${CodePipeline}"
+                      - CodePipeline: !FindInMap [ResourceMap, BackendCodePipeline, Name]
+      RoleName: CloudWatchEventRuleRole
+
