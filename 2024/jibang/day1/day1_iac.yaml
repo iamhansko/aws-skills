@@ -666,7 +666,6 @@ Resources:
               - sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
-        - arn:aws:iam::aws:policy/AmazonEKSForFargateServiceRolePolicy 
       RoleName: EksClusterIamRole
   EksNodeIamRole:
     Type: AWS::IAM::Role
@@ -700,9 +699,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
         - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
-      Condition:
-        ArnLike:
-          "aws:SourceArn": "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:fargateprofile/${EksCluster}/*"
       RoleName: EksFargatePodExecutionIamRole
   EksClusterAccessEntry:
     # To manage your EKS Cluster using 'kubectl' commands inside a Bastion EC2 
@@ -728,14 +724,14 @@ Resources:
     Type: AWS::DocDB::DBCluster
     Properties:
       AvailabilityZones: 
-        - ${AWS::Region}a
-        - ${AWS::Region}b
+        - !Sub ${AWS::Region}a
+        - !Sub ${AWS::Region}b
       DBClusterIdentifier: skills-mongodb-cluster
       DBSubnetGroupName: !Ref DocumentDBSubnetGroup
       EnableCloudwatchLogsExports: 
         - audit
         - profiler
-      MasterUsername: admin
+      MasterUsername: documentadmin # don't use "admin"
       MasterUserPassword: adminpassword1234!
       Port: 27000 #27017
       StorageEncrypted: true
@@ -747,40 +743,48 @@ Resources:
       SubnetIds: 
         - !Ref ProtectedSubnetA
         - !Ref ProtectedSubnetB
-  ElastiCache:
-    Type: AWS::ElastiCache::CacheCluster
-    Properties:
-      CacheNodeType: cache.t4g.small
-      ClusterName: skills-redis-cluster
-      Engine: redis
-      IpDiscovery: ipv4
-      LogDeliveryConfigurations: 
-        - DestinationDetails: 
-            CloudWatchLogsDetails:
-              LogGroup: !Ref ElastiCacheCloudWatchLogGroup
-          DestinationType: cloudwatch-logs
-          LogFormat: json
-          LogType: engine-log
-      NetworkType: ipv4
-      NumCacheNodes: 2
-      Port: 6300 #6379
-      SnapshotArns: 
-        - arn:aws:s3:::my_bucket/snapshot1.rdb
-      SnapshotName: snapshot
-      SnapshotRetentionLimit: 2
-      TransitEncryptionEnabled: true
-  ElastiCacheCloudWatchLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /redis
+  # ElastiCache:
+  #   Type: AWS::ElastiCache::CacheCluster
+  #   Properties:
+  #     CacheNodeType: cache.t4g.small
+  #     ClusterName: skills-redis-cluster
+  #     Engine: redis
+  #     IpDiscovery: ipv4
+  #     LogDeliveryConfigurations: 
+  #       - DestinationDetails: 
+  #           CloudWatchLogsDetails:
+  #             LogGroup: !Ref ElastiCacheCloudWatchLogGroup
+  #         DestinationType: cloudwatch-logs
+  #         LogFormat: json
+  #         LogType: engine-log
+  #     NetworkType: ipv4
+  #     CacheSecurityGroupNames:
+  #       - !Ref ElastiCacheSecurityGroup
+  #     NumCacheNodes: 1
+  #     Port: 6300 #6379
+  #     SnapshotName: snapshot
+  #     TransitEncryptionEnabled: true
+  # ElastiCacheSecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Security Group for ElastiCache
+  #     GroupName: elasticache-sg
+  #     SecurityGroupIngress: 
+  #       - IpProtocol: tcp
+  #         FromPort: 6300 #6379
+  #         ToPort: 6300 #6379
+  #         CidrIp: 0.0.0.0/0
+  #     VpcId: !Ref Vpc
+  # ElastiCacheCloudWatchLogGroup:
+  #   Type: AWS::Logs::LogGroup
+  #   Properties:
+  #     LogGroupName: /redis
   SecretsManager:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: usersecret
       SecretString: 
         '{"secretValue":"secret1234567890"}'
-
-
 
 
 

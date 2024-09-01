@@ -112,14 +112,14 @@ Resources:
     Properties:
       LoginProfile: 
         Password: Student01password!
-        PasswordResetRequired: True
+        PasswordResetRequired: False
       UserName: student01
   Student02:
     Type: AWS::IAM::User
     Properties:
       LoginProfile: 
         Password: Student02password!
-        PasswordResetRequired: True
+        PasswordResetRequired: False
       UserName: student02
   Student01Policy:
     Type: AWS::IAM::Policy
@@ -351,35 +351,6 @@ Resources:
           SourceSecurityGroupId: !Ref PublicEc2SecurityGroup
           ToPort: 22
       VpcId: !Ref Vpc
-  LambdaIamRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Policies:
-        - PolicyName: PutS3Policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:CreateBucket
-                  - s3:PutObject
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-      RoleName: LambdaS3Role
   Lambda:
     Type: AWS::Lambda::Function
     Properties:

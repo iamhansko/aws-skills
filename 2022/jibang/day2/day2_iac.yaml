@@ -112,6 +112,8 @@ Resources:
       LogStreamName: kinesis-analytics-log-stream
   KinesisDataAnalyticsCloudWatchLoggingOption:
     Type: AWS::KinesisAnalyticsV2::ApplicationCloudWatchLoggingOption
+    DependsOn:
+      - KinesisDataAnalytics
     Properties:
       ApplicationName: kda_flink_application
       CloudWatchLoggingOption: 

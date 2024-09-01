@@ -307,7 +307,6 @@ Resources:
             RUN go mod tidy && go mod download && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ./main
             FROM ubuntu:22.10
             WORKDIR /app
-            RUN apk --no-cache add ca-certificates && apk --no-cache upgrade
             COPY --from=build /source/main ./
             RUN chmod +x ./main
             RUN adduser -D appuser
@@ -373,7 +372,7 @@ Resources:
       UserName: red-user
       LoginProfile: 
         Password: Reduserpassword!
-        PasswordResetRequired: true
+        PasswordResetRequired: false
       Policies: 
         - PolicyName: iamUserPolicy
           PolicyDocument:
