@@ -1,0 +1,31 @@
+# 2025년도 클라우드컴퓨팅 지방경기대회 채점스크립트 설명서
+
+
+명령어 입력시 시간이 오래 걸림으로 자동화된 스크립트를 이용하여 채점시간을 줄일 수 있습니다.
+만약 스크립트의 업데이트가 있다면 아래 링크에 파일이 업로드 됩니다.
+https://github.com/cloud-skills/public
+
+
+1과제는 파일 하나로 구성되어 있으며 Bastion에서 아래 명령어를 입력해 실행 할 수 있습니다.
+스크립트 결과와 채점지를 비교하며 확인할 수 있습니다.
+---
+$ chmod 755 1_all_marking.sh
+$ ./1_all_marking.sh
+---
+
+
+2과제의 경우는 모듈 별로 파일이 나눠져 있습니다. 4개를 채점 순서에 맞게 각각 실행 하시면 됩니다.
+4개의 파일이 실행되는 Bastion 서버가 틀리니 주의하여 실행 합니다.
+스크립트 결과와 채점지를 비교하며 확인할 수 있습니다.
+---
+$ chmod 755 2_secure_vpn.sh
+$ ./2_secure_vpn.sh
+
+$ chmod 755 2_eventdriven_autoscaling.sh
+$ ./2_eventdriven_autoscaling.sh
+
+$ chmod 755 2_infra_as_code.sh
+$ ./2_infra_as_code.sh
+
+$ chmod 755 2_ec2_automation.sh
+$ ./2_ec2_automation.sh
